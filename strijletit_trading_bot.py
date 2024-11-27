@@ -29,7 +29,7 @@ def get_dexscreener_data():
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
-        with open('file.json','w') as f:
+        with open('all_token.json','w') as f:
             json.dump(response.json(), f)
         all_tocken = []
         for i in response.json():
