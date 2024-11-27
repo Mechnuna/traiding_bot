@@ -3,6 +3,12 @@ import requests
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackContext
 from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import time
 import json
 
@@ -41,12 +47,42 @@ def get_dexscreener_data():
         return []
 
 
-# Получение твитов с аккаунтов через Selenium (реализуйте или используйте другой метод)
-def get_tweets_from_twitter_via_selenium(account):
-    # Здесь должен быть код для скрапинга твитов через Selenium (реализация по вашему запросу)
-    # Для упрощения примера, вернем фейковые данные
-    return [f"Tweet from {account} mentioning CA token", f"Another tweet from {account} mentioning tokenX"]
+# Функция для скрапинга твитов через Selenium
+def get_tweets_from_twitter_via_selenium(account: str):
+    # Настройка опций для Selenium WebDriver
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # Для скрытого режима
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
 
+    # Путь к драйверу (должен быть у вас установлен ChromeDriver)
+    service = Service(executable_path="./chromedriver-mac-arm64/chromedriver")  # Укажите путь к вашему chromedriver
+
+    # Запуск WebDriver
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+
+    try:
+        # Переходим на страницу аккаунта
+        driver.get(f"https://twitter.com/{account}")
+
+        # Ожидаем загрузки страницы
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'article')))
+
+        # Получаем последние 10 твитов
+        tweets = []
+        tweet_elements = driver.find_elements(By.CSS_SELECTOR, "article div[lang]")
+
+        for tweet in tweet_elements[:10]:
+            tweet_text = tweet.text.lower()  # Приводим к нижнему регистру
+            tweets.append(tweet_text)
+
+        return tweets
+
+    except Exception as e:
+        print(f"Ошибка при скрапинге твитов с аккаунта {account}: {e}")
+        return []
+    finally:
+        driver.quit()
 
 # Проверка токенов через RugCheck
 def check_tokens_with_rugcheck(tokens):
@@ -128,10 +164,10 @@ async def analyze(update: Update, context: CallbackContext) -> None:
     dexscreener_tokens = get_dexscreener_data()[:10]
 
     #TODO
-    # all_tweets = []
-    # for account in accounts:
-    #     tweets = get_tweets_from_twitter_via_selenium(account)
-    #     all_tweets.extend(tweets)
+    all_tweets = []
+    for account in accounts:
+        tweets = get_tweets_from_twitter_via_selenium(account)
+        all_tweets.extend(tweets)
 
     # Прогоняем токены через RugCheck
     tokens = [token["tokenAddress"] for token in dexscreener_tokens]
