@@ -39,8 +39,14 @@ def get_dexscreener_data():
             json.dump(response.json(), f)
         all_tocken = []
         for i in response.json():
-            all_tocken.append({"url" : i["url"],
-                               "tokenAddress" : i["tokenAddress"]})
+            result = {
+            link.get("label", link.get("type")): link["url"] 
+            for link in i["links"] 
+            if "url" in link
+            }
+            result["url"] = i["url"]
+            result["tokenAddress"] = i["tokenAddress"]
+            all_tocken.append(result)
         return all_tocken
     except requests.exceptions.RequestException as e:
         print(f"Ошибка при получении данных с Dexscreener: {e}")
@@ -54,6 +60,10 @@ def get_tweets_from_twitter_via_selenium(account: str):
     chrome_options.add_argument("--headless")  # Для скрытого режима
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument(
+    "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    )
+
 
     # Путь к драйверу (должен быть у вас установлен ChromeDriver)
     service = Service(executable_path="./chromedriver-mac-arm64/chromedriver")  # Укажите путь к вашему chromedriver
@@ -63,21 +73,29 @@ def get_tweets_from_twitter_via_selenium(account: str):
 
     try:
         # Переходим на страницу аккаунта
-        driver.get(f"https://twitter.com/{account}")
+        driver.get(f"https://x.com/{account}")
+        print("start")
 
         # Ожидаем загрузки страницы
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'article')))
-
+        WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'article')))
+        print("get css selector")
         # Получаем последние 10 твитов
         tweets = []
         tweet_elements = driver.find_elements(By.CSS_SELECTOR, "article div[lang]")
-
+        print("find css selector")
         for tweet in tweet_elements[:10]:
             tweet_text = tweet.text.lower()  # Приводим к нижнему регистру
             tweets.append(tweet_text)
+        print("add tweet")
 
         return tweets
 
+    except TimeoutException:
+        print(f"Тайм-аут при загрузке твитов с аккаунта {account}.")
+        return []
+    except WebDriverException as e:
+        print(f"Ошибка WebDriver при скрапинге аккаунта {account}: {e}")
+        return []
     except Exception as e:
         print(f"Ошибка при скрапинге твитов с аккаунта {account}: {e}")
         return []
@@ -90,14 +108,16 @@ def check_tokens_with_rugcheck(tokens):
     results = []
     for token in tokens:
         try:
-            response = requests.get(f"{url}/{token}/report/summary")
+            response = requests.get(f"{url}/{token}/report")
             response.raise_for_status()
             data = response.json()
             for i in data['risks']:
                 if i['level'] == 'danger':
                     break
             else:
-                results.append(token)
+                results.append({'token': data['mint'], 
+                                'symbol': data['tokenMeta']['symbol'],
+                                'risk': data['score']})
 
         except requests.exceptions.RequestException as e:
             print(f"Ошибка при проверке токена {token} через RugCheck: {e}")
@@ -127,10 +147,34 @@ async def analyze_dexscreener(update: Update, context: CallbackContext) -> None:
     if not dexscreener_tokens:
         await update.message.reply_text("Не удалось получить данные с Dexscreener.")
         return
-    message = "Топовые токены с Dexscreener:\n\n"
+    # message = "Топовые токены с Dexscreener:\n\n"
+    # for token in dexscreener_tokens:
+    #     for k,v in token.items():
+    #         message += f"{k} {v}\n"
+    #     message += "\n\n"
+    # print(message)
+    # await send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message)
+    # Формируем сообщения
+    messages = []
+    current_message = "Топовые токены с Dexscreener:\n\n"
     for token in dexscreener_tokens:
-        message += f"Token: {token['tokenAddress']}\nURL: {token['url']}\n\n"
-    await send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message)
+        token_info = "\n".join([f"{k}: {v}" for k, v in token.items()])
+        token_info += "\n\n"
+        
+        # Если длина текущего сообщения превысит 4000 символов, создаём новое сообщение
+        if len(current_message) + len(token_info) > 4000:
+            messages.append(current_message)
+            current_message = ""
+        
+        current_message += token_info
+    
+    # Добавляем последнее сообщение
+    if current_message:
+        messages.append(current_message)
+
+    # Отправляем сообщения в Telegram
+    for msg in messages:
+        await send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
 
 # Команда для анализа твитов
@@ -164,20 +208,43 @@ async def analyze(update: Update, context: CallbackContext) -> None:
     dexscreener_tokens = get_dexscreener_data()[:10]
 
     #TODO
-    all_tweets = []
-    for account in accounts:
-        tweets = get_tweets_from_twitter_via_selenium(account)
-        all_tweets.extend(tweets)
+    # all_tweets = []
+    # for account in accounts:
+    #     tweets = get_tweets_from_twitter_via_selenium(account)
+    #     all_tweets.extend(tweets)
 
     # Прогоняем токены через RugCheck
     tokens = [token["tokenAddress"] for token in dexscreener_tokens]
     good_tokens = check_tokens_with_rugcheck(tokens)
 
     # Сортируем результаты и отправляем в Telegram
-    message = "Результаты анализа токенов:\n\n"
+    # message = "Результаты анализа токенов:\n\n"
+    # for token in good_tokens:
+    #     message += f"Токен: {token}\n"
+        
+    # await send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message)
+    # Формируем сообщения
+    messages = []
+    current_message = "Результаты анализа токенов:\n\n"
+    
     for token in good_tokens:
-        message += f"Токен: {token}\n"
-    await send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, message)
+        token_info = "\n".join([f"{k}: {v}" for k, v in token.items()])
+        token_info += "\n\n"
+        
+        # Если длина текущего сообщения превысит 4000 символов, создаём новое сообщение
+        if len(current_message) + len(token_info) > 4000:
+            messages.append(current_message)
+            current_message = ""
+        
+        current_message += token_info
+    # Добавляем последнее сообщение
+    if current_message:
+        messages.append(current_message)
+
+    # Отправляем сообщения в Telegram
+    for msg in messages:
+        print(msg)  # Для отладки
+        await send_telegram_message(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
 
 # Основной код для запуска бота
